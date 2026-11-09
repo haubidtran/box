@@ -1,0 +1,171 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Book a Time</title>
+<style>
+:root{--bg:#faf8f5;--card:#fff;--text:#1d1b19;--muted:#6f6a64;--line:#e6e1da;--accent:#2f6f5e;--accent-text:#fff;--taken:#efebe5;--danger:#b3412f}
+@media (prefers-color-scheme:dark){:root{--bg:#17201e;--card:#1f2a27;--text:#eef2f0;--muted:#9aa8a3;--line:#33423e;--accent:#5fb59c;--accent-text:#0f1a17;--taken:#26332f;--danger:#e47a67}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--text);font:16px/1.5 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+main{max-width:640px;margin:0 auto;padding:24px 16px 48px}
+h1{font-size:1.6rem;margin:0 0 4px}
+.sub{color:var(--muted);margin:0 0 20px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:16px;margin-bottom:16px}
+.card h2{font-size:1rem;margin:0 0 12px}
+.days{display:flex;gap:8px;overflow-x:auto;padding-bottom:6px}
+.day{flex:0 0 auto;min-width:64px;text-align:center;border:1px solid var(--line);background:var(--bg);color:var(--text);border-radius:12px;padding:8px 10px;cursor:pointer;font:inherit}
+.day small{display:block;color:var(--muted)}
+.day[aria-pressed="true"]{background:var(--accent);color:var(--accent-text);border-color:var(--accent)}
+.day[aria-pressed="true"] small{color:var(--accent-text)}
+.slots{display:grid;grid-template-columns:repeat(auto-fill,minmax(92px,1fr));gap:8px}
+.slot{border:1px solid var(--accent);background:transparent;color:var(--accent);border-radius:10px;padding:9px 6px;cursor:pointer;font:inherit}
+.slot[aria-pressed="true"]{background:var(--accent);color:var(--accent-text)}
+.slot:disabled{background:var(--taken);border-color:var(--taken);color:var(--muted);cursor:not-allowed;text-decoration:line-through}
+label{display:block;font-size:.9rem;color:var(--muted);margin:10px 0 4px}
+input,textarea{width:100%;padding:10px;border:1px solid var(--line);border-radius:10px;background:var(--bg);color:var(--text);font:inherit}
+.btn{display:inline-block;border:0;background:var(--accent);color:var(--accent-text);padding:11px 18px;border-radius:10px;font:inherit;font-weight:600;cursor:pointer;text-decoration:none;margin-top:14px}
+.btn.alt{background:transparent;color:var(--accent);border:1px solid var(--accent)}
+.btn:disabled{opacity:.5;cursor:not-allowed}
+.msg{padding:10px 12px;border-radius:10px;background:var(--taken);margin:12px 0}
+.msg.err{color:var(--danger)}
+.hidden{display:none}
+</style>
+</head>
+<body>
+<main>
+  <h1 id="title"></h1>
+  <p class="sub">Pick a day and time that works for you.</p>
+
+  <div class="card"><h2>1. Choose a day</h2><div class="days" id="days"></div></div>
+  <div class="card"><h2>2. Choose a time</h2><div class="slots" id="slots"></div></div>
+
+  <div class="card" id="formCard">
+    <h2>3. Your details</h2>
+    <label for="name">Name</label>
+    <input id="name" autocomplete="name" maxlength="80">
+    <label for="phone">Your phone (optional)</label>
+    <input id="phone" type="tel" autocomplete="tel" maxlength="30">
+    <label for="note">Note (optional)</label>
+    <textarea id="note" rows="2" maxlength="300"></textarea>
+    <button class="btn" id="submit" disabled>Confirm booking</button>
+    <div id="formMsg"></div>
+  </div>
+
+  <div class="card hidden" id="doneCard">
+    <h2>You're booked</h2>
+    <p id="doneText"></p>
+    <a class="btn" id="smsBtn" href="#">Text to confirm</a>
+    <button class="btn alt" id="againBtn">Book another</button>
+  </div>
+</main>
+
+<script>
+/* ============ EDIT THIS SECTION ============ */
+var CONFIG = {
+  title: "Book a time",
+  ownerPhone: "+15125550123",      // your number, with country code (booking texts go here)
+  days: [1, 2, 3, 4, 5],           // 0=Sun ... 6=Sat
+  start: "09:00",
+  end: "17:00",
+  duration: 30,                    // minutes
+  daysAhead: 14,                   // how many bookable days to show
+  // Optional: free form endpoint (e.g. https://formspree.io/f/xxxxxx) that emails you each booking.
+  formUrl: "",
+  // Optional: times you've already filled, so visitors see them as taken. Format "YYYY-MM-DD HH:MM".
+  blocked: [
+    // "2026-11-12 10:00",
+  ]
+};
+/* ============================================ */
+
+(function(){
+  var DAY_NAMES = ["Sun","Mon","Tue","Wed","Thu","Fri","Sat"];
+  var selDay = null, selTime = null;
+  var $ = function(id){ return document.getElementById(id); };
+  var pad = function(n){ return (n<10?"0":"")+n; };
+  var dayKey = function(d){ return d.getFullYear()+"-"+pad(d.getMonth()+1)+"-"+pad(d.getDate()); };
+  var toMin = function(t){ var p=t.split(":"); return +p[0]*60+ +p[1]; };
+  var fromMin = function(m){ return pad(Math.floor(m/60))+":"+pad(m%60); };
+  function fmtTime(t){ var p=t.split(":"), h=+p[0]; return ((h%12)||12)+":"+p[1]+" "+(h<12?"AM":"PM"); }
+  function fmtDay(k){ var p=k.split("-"); return new Date(+p[0],+p[1]-1,+p[2]).toLocaleDateString(undefined,{weekday:"long",month:"long",day:"numeric"}); }
+
+  // Slots this browser already booked (local only, prevents the same person double-booking a time)
+  var mine = {};
+  try{ mine = JSON.parse(localStorage.getItem("booked")||"{}"); }catch(e){}
+  function isTaken(day,time){
+    return CONFIG.blocked.indexOf(day+" "+time)>-1 || !!mine[day+" "+time];
+  }
+
+  $("title").textContent = CONFIG.title; document.title = CONFIG.title;
+
+  function upcomingDays(){
+    var out=[], d=new Date(); d.setHours(0,0,0,0);
+    for(var i=0;i<60 && out.length<CONFIG.daysAhead;i++){
+      if(CONFIG.days.indexOf(d.getDay())>-1) out.push(new Date(d));
+      d.setDate(d.getDate()+1);
+    }
+    return out;
+  }
+  function timesForDay(key){
+    var out=[], s=toMin(CONFIG.start), e=toMin(CONFIG.end), step=CONFIG.duration;
+    var now=new Date(), today=key===dayKey(now), nowMin=now.getHours()*60+now.getMinutes();
+    for(var m=s;m+step<=e;m+=step){ if(today && m<=nowMin) continue; out.push(fromMin(m)); }
+    return out;
+  }
+  function renderDays(){
+    var box=$("days"); box.textContent="";
+    var days=upcomingDays();
+    if(!selDay) selDay=dayKey(days[0]);
+    days.forEach(function(d){
+      var k=dayKey(d), b=document.createElement("button");
+      b.className="day"; b.setAttribute("aria-pressed", k===selDay);
+      b.textContent=DAY_NAMES[d.getDay()];
+      var s=document.createElement("small"); s.textContent=(d.getMonth()+1)+"/"+d.getDate(); b.appendChild(s);
+      b.onclick=function(){ selDay=k; selTime=null; renderDays(); renderSlots(); update(); };
+      box.appendChild(b);
+    });
+  }
+  function renderSlots(){
+    var box=$("slots"); box.textContent="";
+    var times=timesForDay(selDay);
+    if(!times.length){ box.textContent="No times left on this day."; return; }
+    times.forEach(function(t){
+      var b=document.createElement("button"); b.className="slot"; b.textContent=fmtTime(t);
+      b.disabled=isTaken(selDay,t); b.setAttribute("aria-pressed", t===selTime);
+      b.onclick=function(){ selTime=t; renderSlots(); update(); };
+      box.appendChild(b);
+    });
+  }
+  function update(){ $("submit").disabled = !(selDay && selTime && $("name").value.trim()); }
+  ["name","phone","note"].forEach(function(id){ $(id).addEventListener("input", update); });
+
+  $("submit").onclick = async function(){
+    var name=$("name").value.trim(), phone=$("phone").value.trim(), note=$("note").value.trim();
+    var day=selDay, time=selTime;
+    $("submit").disabled=true;
+    if(CONFIG.formUrl){
+      try{
+        await fetch(CONFIG.formUrl,{method:"POST",headers:{"Content-Type":"application/json","Accept":"application/json"},
+          body:JSON.stringify({name:name,phone:phone,note:note,date:day,time:time,when:fmtDay(day)+" at "+fmtTime(time)})});
+      }catch(e){ /* the text message below still works */ }
+    }
+    mine[day+" "+time]=true;
+    try{ localStorage.setItem("booked", JSON.stringify(mine)); }catch(e){}
+    var body="Hi, this is "+name+(phone?" ("+phone+")":"")+". I booked "+fmtDay(day)+" at "+fmtTime(time)+"."+(note?" Note: "+note:"");
+    $("smsBtn").href="sms:"+CONFIG.ownerPhone.replace(/[^\d+]/g,"")+"?&body="+encodeURIComponent(body);
+    $("doneText").textContent=fmtDay(day)+" at "+fmtTime(time)+". Tap below to text a quick confirmation.";
+    $("formCard").classList.add("hidden"); $("doneCard").classList.remove("hidden");
+    renderSlots();
+  };
+  $("againBtn").onclick=function(){
+    $("doneCard").classList.add("hidden"); $("formCard").classList.remove("hidden");
+    selTime=null; $("note").value=""; renderSlots(); update();
+  };
+
+  renderDays(); renderSlots(); update();
+})();
+</script>
+</body>
+</html>
